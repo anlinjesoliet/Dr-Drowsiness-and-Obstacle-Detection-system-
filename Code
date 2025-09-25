@@ -1,0 +1,240 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// -------------------- LCD --------------------
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// -------------------- L298N Motor Driver --------------------
+#define enA 10
+#define in1 9
+#define in2 8
+#define in3 7
+#define in4 6
+#define enB 5
+
+// -------------------- Ultrasonic + Servo --------------------
+#define echo A2
+#define trigger A3
+#define servo 4
+
+// -------------------- Eye Blink Sensor --------------------
+#define EYE_SENSOR A0   // IR sensor digital OUT pin
+
+// -------------------- LED + BUZZER --------------------
+#define BUZZER 11
+#define LED 12
+
+int Set = 15; // Minimum distance to obstacle in cm
+int distance_L, distance_F, distance_R;
+
+// -------------------- SETUP --------------------
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(echo, INPUT);
+  pinMode(trigger, OUTPUT);
+
+  pinMode(enA, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+  pinMode(in3, OUTPUT);
+  pinMode(in4, OUTPUT);
+  pinMode(enB, OUTPUT);
+
+  pinMode(servo, OUTPUT);
+  pinMode(EYE_SENSOR, INPUT);
+
+  pinMode(BUZZER, OUTPUT);
+  pinMode(LED, OUTPUT);
+
+  analogWrite(enA, 200); 
+  analogWrite(enB, 200); 
+
+  // LCD init
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Driver Assist Bot");
+  delay(1500);
+  lcd.clear();
+
+  // Initial servo sweep
+  for (int angle = 70; angle <= 140; angle += 5) servoPulse(servo, angle);
+  for (int angle = 140; angle >= 0; angle -= 5) servoPulse(servo, angle);
+  for (int angle = 0; angle <= 70; angle += 5) servoPulse(servo, angle);
+
+  distance_F = Ultrasonic_read();
+  delay(500);
+}
+
+// -------------------- LOOP --------------------
+void loop() {
+  int eyeStatus = digitalRead(EYE_SENSOR);
+
+  // Driver awake
+  if (eyeStatus == LOW) {   // eyes open
+    Stop();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Eyes Open");
+    lcd.setCursor(0, 1);
+    lcd.print("Driver's Control");
+
+    digitalWrite(BUZZER, LOW); // buzzer OFF
+    digitalWrite(LED, LOW);    // LED OFF
+
+    delay(500);
+    return;  // Skip obstacle logic
+  }
+
+  // Driver sleeping / obstacle detection mode
+  Serial.println("ALERT! DRIVER SLEEPING");
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("ALERT! DRIVER");
+  lcd.setCursor(0, 1);
+  lcd.print("SLEEPING!!!");
+
+  digitalWrite(BUZZER, HIGH); // buzzer always ON
+  digitalWrite(LED, HIGH);    // LED always ON
+
+  // Obstacle avoidance logic
+  distance_F = Ultrasonic_read();
+  if (distance_F > Set) {
+    forword();   
+  } else {
+    Check_side(); 
+  }
+  delay(10);
+}
+
+// -------------------- SERVO --------------------
+void servoPulse(int pin, int angle) {
+  int pwm = (angle * 11) + 500; 
+  digitalWrite(pin, HIGH);
+  delayMicroseconds(pwm);
+  digitalWrite(pin, LOW);
+  delay(50); 
+}
+
+// -------------------- ULTRASONIC --------------------
+long Ultrasonic_read() {
+  digitalWrite(trigger, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigger, HIGH);
+  delayMicroseconds(10);
+  long time = pulseIn(echo, HIGH, 20000);
+  if (time == 0) return 999; 
+  return time / 29 / 2;
+}
+
+// -------------------- DECISION --------------------
+void compareDistance() {
+  const unsigned long TURN_DELAY_MS = 500;          // time to complete one turn
+  const unsigned long FORWARD_AFTER_TURN_MS = 1000; // forward time before parking
+  const unsigned long ALIGN_FORWARD_MS = 800;       // forward after realignment
+
+  if (distance_L < distance_R) {
+    turnLeft();
+    delay(TURN_DELAY_MS);
+
+    forword();
+    delay(FORWARD_AFTER_TURN_MS);
+
+    turnRight();
+    delay(TURN_DELAY_MS);
+
+    forword();
+    delay(ALIGN_FORWARD_MS);
+
+    Stop();
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Parked ");
+
+    while (true) {
+      Stop();
+    }
+
+  } else {
+    turnRight();
+    delay(TURN_DELAY_MS);
+
+    forword();
+    delay(FORWARD_AFTER_TURN_MS);
+
+    turnLeft();
+    delay(TURN_DELAY_MS);
+
+    forword();
+    delay(ALIGN_FORWARD_MS);
+
+    Stop();
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Parked ");
+
+    while (true) {
+      Stop();
+    }
+  }
+}
+
+// -------------------- CHECK LEFT & RIGHT --------------------
+void Check_side() {
+  Stop();
+  delay(100);
+
+  // Look right
+  for (int angle = 70; angle <= 140; angle += 5) servoPulse(servo, angle);
+  delay(300);
+  distance_R = Ultrasonic_read();
+
+  // Look left
+  for (int angle = 140; angle >= 0; angle -= 5) servoPulse(servo, angle);
+  delay(500);
+  distance_L = Ultrasonic_read();
+
+  // Return center
+  for (int angle = 0; angle <= 70; angle += 5) servoPulse(servo, angle);
+  delay(300);
+
+  compareDistance();
+}
+
+// -------------------- MOTOR FUNCTIONS --------------------
+void forword() {
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, HIGH);
+  digitalWrite(in3, HIGH);
+  digitalWrite(in4, LOW);
+}
+
+void backword() {
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, HIGH);
+}
+
+void turnRight() {
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, HIGH);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, HIGH);
+}
+
+void turnLeft() {
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, HIGH);
+  digitalWrite(in4, LOW);
+}
+
+void Stop() {
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, LOW);
+}
